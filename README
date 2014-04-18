@@ -1,0 +1,32 @@
+PL/SQL Package SCHEDULER_BACKUP Readme
+======================================
+
+Installation:
+-------------
+bash> sqlplus / as sysdba
+SQL*Plus> @SCHEDULER_BACKUP
+SQL*Plus> begin
+scheduler_backup.setup(os_username=>'oracle',os_password=>'kennenurich',
+                       db_username=>'sys',db_password=>'kenneauchnurich');
+end;
+/
+
+Usage:
+------
+After the SCHEDULER_BACKUP package has been installed into the database,
+use SQL Developer to open the package specification. Change the commands
+for daily and weekly backup, the schedule, the flags (descriptions
+are in the package specification) to adapt to your needs. Recompile the
+package.
+Caution: Changing the package specification does not change the Scheduler
+objects (Credentials, Jobs, Programs) the package has created. To implement
+changes you made in the specification, call
+
+SQL*Plus> exec scheduler_backup.setup
+
+without parameters from SQL*Plus. This will recreate all objects except the
+Credentials, thus implementing changes you made in the package.
+
+Load schedulernew.sql into a SQL Developer worksheet. It contains examples how
+to use the package and SQL queries to get the state of this package's scheduler
+objects. It is even possible to retrieve RMAN output through SQL.
