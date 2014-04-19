@@ -382,10 +382,12 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
     drop_objects(drop_credentials=>true);
 
     -- create OS and DB credentials
-    create_credentials(os_username, os_password, db_username, db_password, db_database_role);
+    create_credentials(os_username=>os_username, os_password=>os_password,
+                       db_username=>db_username, db_password=>db_password,
+                       db_database_role=>db_database_role);
 
     -- create programs and jobs
-    setup(configure_rman);
+    setup(configure_rman=>configure_rman);
 
   end setup;
 
@@ -422,7 +424,7 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
                || 'BACKUP SKIPPED DUE TO INSTANCE/DATABASE STATUS');
       $END
     end if;
-    dbms_scheduler.run_job(job_to_start);
+    dbms_scheduler.run_job(job_name=>job_to_start);
   end backup;
 
   -- guess what this does
@@ -532,15 +534,15 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
 
   -- display status of the objects we created
   function status return stringset_t pipelined is
-    type job_list_t is table of user_scheduler_jobs%rowtype index by binary_integer;
-    type prgm_list_t is table of user_scheduler_programs%rowtype index by binary_integer;
+    type job_list_t        is table of        user_scheduler_jobs%rowtype index by binary_integer;
+    type prgm_list_t       is table of    user_scheduler_programs%rowtype index by binary_integer;
     type credential_list_t is table of user_scheduler_credentials%rowtype index by binary_integer;
-    type group_list_t is table of all_scheduler_groups%rowtype index by binary_integer;
-    job_list job_list_t;
-    prgm_list prgm_list_t;
-    cred_list credential_list_t;
-    group_list group_list_t;
-    l_row pls_integer;
+    type group_list_t      is table of       all_scheduler_groups%rowtype index by binary_integer;
+    job_list          job_list_t;
+    prgm_list        prgm_list_t;
+    cred_list  credential_list_t;
+    group_list      group_list_t;
+    l_row            pls_integer;
   begin
     select * bulk collect into job_list from user_scheduler_jobs where job_name like g_prefix||'%';
     l_row := job_list.first;
