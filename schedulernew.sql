@@ -76,8 +76,11 @@ exec dbms_scheduler.run_job(job_name=>'BACKUP_JOB_WEEKLY',use_current_session=>f
 
 -- display output of last RMAN session
 select output from gv$rman_output where session_recid=(select max(session_recid) from v$rman_status) order by recid;
-
-
+-- for RMAN output of previous jobs, run the following query in SQL Developer,
+-- and doubleclick the field 'binary_output' of an entry you are interested in.
+-- A pencil symbol shows up right to the field. Click the pencil symbol and choose display as text
+-- in the upcoming window.
+select * from all_scheduler_job_run_details where job_name like 'BACKUP_%'/**/ order by log_date desc;
 
 -- intialize the package
 -- after calling this, we have daily incremental backups and weekly full backups
