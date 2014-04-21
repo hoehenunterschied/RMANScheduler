@@ -1,5 +1,6 @@
--- prevent accidently execution of this worksheet as a script in sQL Developer
+-- prevent accidently execution of this worksheet as a script in SQL Developer
 exit;
+commit;
 --
 -- grant these to the user who installs the package
 --
@@ -76,11 +77,8 @@ exec dbms_scheduler.run_job(job_name=>'BACKUP_JOB_WEEKLY',use_current_session=>f
 
 -- display output of last RMAN session
 select output from gv$rman_output where session_recid=(select max(session_recid) from v$rman_status) order by recid;
--- for RMAN output of previous jobs, run the following query in SQL Developer,
--- and doubleclick the field 'binary_output' of an entry you are interested in.
--- A pencil symbol shows up right to the field. Click the pencil symbol and choose display as text
--- in the upcoming window.
-select * from all_scheduler_job_run_details where job_name like 'BACKUP_%'/**/ order by log_date desc;
+
+
 
 -- intialize the package
 -- after calling this, we have daily incremental backups and weekly full backups
@@ -129,6 +127,7 @@ exec dbms_scheduler.run_job(job_name=>'BACKUP_JOB_WEEKLY',use_current_session=>f
 
 -- display output of last RMAN session
 select output from gv$rman_output where session_recid=(select max(session_recid) from v$rman_status) order by recid;
+select SID, START_TIME,TOTALWORK, sofar, round((sofar/totalwork) * 100,2) "% done",sysdate + TIME_REMAINING/3600/24 end_at from gv$session_longops where totalwork > sofar AND opname NOT LIKE '%aggregate%' AND opname like 'RMAN%';
 
 desc scheduler_backup;
 select * from v$nls_parameters;
@@ -145,21 +144,23 @@ select * from all_scheduler_schedules;
 select * from all_scheduler_windows;
 -- show scheduler windows
 select * from all_scheduler_groups where group_name like 'BACKUP_%';
+-- show scheduler chains
+select * from all_scheduler_chains where chain_name like 'BACKUP_%';
 -- show when jobs have been run
 select * from all_scheduler_job_log where job_name like 'BACKUP_%' /*and owner='SYS'/**/ order by log_date desc;
 -- show state and next execution for jobs
 select job_name,owner,STATE,NEXT_RUN_DATE,all_scheduler_jobs.* from all_scheduler_jobs where job_name like 'BACKUP_%' /*and owner='SYS'/**/;
 -- show details about job runs
-select * from all_scheduler_job_run_details where job_name like 'BACKUP_%'/**/ order by log_date desc;
-
-select SID, START_TIME,TOTALWORK, sofar, (sofar/totalwork) * 100 "% done",sysdate + TIME_REMAINING/3600/24 end_at from gv$session_longops where totalwork > sofar AND opname NOT LIKE '%aggregate%' AND opname like 'RMAN%';
+select log_id,log_date,job_name,status,binary_output,output from all_scheduler_job_run_details where job_name like 'BACKUP_%'/**/ order by log_date desc;
+select log_id,log_date,dbms_lob.getlength(binary_output) "OUTPUT LENGTH",job_name,status,binary_output from all_scheduler_job_run_details where job_name like 'BACKUP_WORKER_%' order by log_date desc;
+select count(instance_id),instance_id from all_scheduler_job_run_details group by instance_id;
 
 --display jobs and their schedule, regardless if schedule specified by named schedule or part of job definition
 select j.owner,j.job_name,j.state,'schedule' "schedule defined as",j.schedule_name,s.repeat_interval from all_scheduler_jobs j, all_scheduler_schedules s where j.schedule_name=s.schedule_name union all
 select j.owner,j.job_name,j.state,'window' "schedule defined as",j.schedule_name,w.repeat_interval from all_scheduler_jobs j, all_scheduler_windows w where j.schedule_name=w.window_name union all
 select owner,job_name,state,'inline' "schedule defined as",null,repeat_interval from all_scheduler_jobs where schedule_name is null;
-
 select job_name,req_start_date,actual_start_date,a.* from all_scheduler_job_run_details a where actual_start_date - req_start_date > interval '48' day;
+
 select * from ALL_SCHEDULER_WINDOWS;
 select * from ALL_SCHEDULER_WINDOW_DETAILS;
 exec dbms_scheduler.enable('BACKUP_JOB_WEEKLY');
@@ -167,43 +168,10 @@ exec dbms_scheduler.open_window(window_name=>'SATURDAY_WINDOW',duration=>interva
 exec dbms_scheduler.close_window(window_name=>'SATURDAY_WINDOW');
 exec dbms_scheduler.open_window(window_name=>'SUNDAY_WINDOW',duration=>interval '20' minute);
 exec dbms_scheduler.close_window(window_name=>'SUNDAY_WINDOW');
-select dump(sysdate,16),dump(sysdate,10),sysdate from dual;
+
 select * from all_objects where object_name like upper('all_scheduler_%') and owner='SYS';
 select * from all_scheduler_window_groups;
 select * from all_scheduler_wingroup_members where window_group_name='MAINTENANCE_WINDOW_GROUP';
 select * from all_scheduler_jobs where schedule_name='MAINTENANCE_WINDOW_GROUP';
 select * from  all_scheduler_chain_steps;
 
-select * from all_objects where object_name='BACKUP_JOB_CHAIN';
-exec dbms_scheduler.drop_chain(chain_name => 'BACKUP_JOB_CHAIN', force => true);
-
-SELECT */*PLSQL_OPTIMIZE_LEVEL, PLSQL_CODE_TYPE/**/ FROM ALL_PLSQL_OBJECT_SETTINGS WHERE NAME = 'SCHEDULER_BACKUP';
-desc all_plsql_object_settings;
-alter session set plsql_code_type=native;
-alter session set plsql_optimize_level=3;
-
-set serveroutput on;
---------------------------------------------------------------------------------
---------------------------------------------------------------------------------
------------
-set linesize 500
-set longchunksize 500
-set pages 50000
-set long 2000000
-set heading off
-set echo off
-set termout off
-set feedback off
-spool '/home/oracle/scheduler_backup_generated.sql' replace
-exec dbms_metadata.set_transform_param(transform_handle=>DBMS_METADATA.SESSION_TRANSFORM,name=>'SQLTERMINATOR',value=>true);
-
-exec dbms_metadata.set_transform_param(transform_handle=>DBMS_METADATA.SESSION_TRANSFORM,name=>'SPECIFICATION',value=>true);
-exec dbms_metadata.set_transform_param(transform_handle=>DBMS_METADATA.SESSION_TRANSFORM,name=>'BODY',value=>false);
-select dbms_metadata.get_ddl(object_type=>'PACKAGE',name=>'SCHEDULER_BACKUP_TYPES') from dual;
-select dbms_metadata.get_ddl(object_type=>'PACKAGE',name=>'SCHEDULER_BACKUP') from dual;
-
-exec dbms_metadata.set_transform_param(transform_handle=>DBMS_METADATA.SESSION_TRANSFORM,name=>'SPECIFICATION',value=>false);
-exec dbms_metadata.set_transform_param(transform_handle=>DBMS_METADATA.SESSION_TRANSFORM,name=>'BODY',value=>true);
-select dbms_metadata.get_ddl(object_type=>'PACKAGE',name=>'SCHEDULER_BACKUP_TYPES') from dual;
-select dbms_metadata.get_ddl(object_type=>'PACKAGE',name=>'SCHEDULER_BACKUP') from dual;
-spool off

@@ -1,7 +1,7 @@
 CREATE OR REPLACE PACKAGE SCHEDULER_BACKUP_TYPES authid current_user AS
   --
   -- Author: Ralf Lange, ORACLE Deutschland
-  -- 20140418
+  -- 20140421
 
   -- type to identify object types
   subtype object_type_t IS INTEGER;
@@ -18,7 +18,10 @@ show errors
 
 CREATE OR REPLACE PACKAGE SCHEDULER_BACKUP authid current_user as
 -- Ralf Lange, ORACLE Deutschland
--- 20140418
+-- 20140421
+
+  -- if true some routines use dbms_output.put_line
+  g_debug_output constant boolean := true;
 
   -- this flag switches between schedules defined by g_{daily|weekly}_repeat_interval
   -- and windows based scheduling
@@ -39,15 +42,13 @@ CREATE OR REPLACE PACKAGE SCHEDULER_BACKUP authid current_user as
   g_disable_after_failed_check constant boolean := false;
 
   -- RMAN commands for daily backup
-  g_daily_commands varchar2(400) :=
+  g_daily_commands constant varchar2(400) :=
          'backup check logical incremental level 1 for recover of copy with tag ''daily incr'' database;'
       || 'recover copy of database with tag ''daily incr'' until time ''sysdate-3'';'
       || 'backup check logical as compressed backupset archivelog all not backed up delete all input;';
 
   -- RMAN commands for weekly backup
-  -- NOTE: at weekly backup, the commands for daily backup are executed as well!
-  --       See definition of g_weekly_backup_script below
-  g_weekly_commands varchar2(400) :=
+  g_weekly_commands constant varchar2(400) :=
          'backup check logical as compressed backupset database tag ''full backup'';'
       || 'backup check logical as compressed backupset archivelog all not backed up delete all input;'
       || 'delete noprompt obsolete;';
@@ -55,21 +56,21 @@ CREATE OR REPLACE PACKAGE SCHEDULER_BACKUP authid current_user as
   -- RMAN configuration commands
   -- NOTE: RMAN configuration is only done if one of the dbms_scheduler.setup
   --       routines is called with Parameter rman_configuration=>true
-  g_rman_configuration_commands varchar2(400) :=
+  g_rman_configuration_commands constant varchar2(400) :=
          'configure retention policy to recovery window of 30 days;'
-      || 'configure backup optimization on;'
+      || 'configure backup optimization off;'
       || 'configure default device type to disk;'
       || 'configure controlfile autobackup on;'
       || 'configure device type disk parallelism 1 backup type to compressed backupset;'
       || 'configure compression algorithm ''HIGH'' as of release ''DEFAULT'' optimize for load true;';
 
   -- the repeat interval for daily and weekly backup
-  -- NOTE: No daily backup on Saturday because weekly backups execute
-  --       on Saturday and include the commands of daily backup
-  g_daily_repeat_interval user_scheduler_jobs.repeat_interval%type :=
-         'freq=daily;byday=MON,TUE,WED,THU,FRI,SUN;byhour=5;byminute=10';
-  g_weekly_repeat_interval user_scheduler_jobs.repeat_interval%type :=
-         'freq=daily;byday=SAT;byhour=5;byminute=10';
+  -- NOTE: No daily backup on Saturday because we have a Job Chain for Saturday
+  --       that starts jobs for daily and weekly backups
+  g_daily_repeat_interval constant user_scheduler_jobs.repeat_interval%type :=
+                                              'freq=daily;byday=MON,TUE,WED,THU,FRI,SUN;byhour=5;byminute=10';
+  g_weekly_repeat_interval constant user_scheduler_jobs.repeat_interval%type :=
+                                              'freq=daily;byday=SAT;byhour=5;byminute=10';
 
   --
   -- if a strategy of daily and weekly RMAN backups fits your needs, no changes should
@@ -77,11 +78,8 @@ CREATE OR REPLACE PACKAGE SCHEDULER_BACKUP authid current_user as
   --
 
   -- create RMAN run{..} blocks from g_{daily,weekly}_commands above
-  -- NOTE: the RMAN run{..} block for weekly backup also includes the commands from daily backup!
-  g_daily_backup_script        user_scheduler_jobs.job_action%type :=
-         'run { ' || g_daily_commands || ' }';
-  g_weekly_backup_script       user_scheduler_jobs.job_action%type :=
-         'run { ' || g_daily_commands || g_weekly_commands|| ' }';
+  g_daily_backup_script  constant user_scheduler_jobs.job_action%type := 'run { ' || g_daily_commands || ' }';
+  g_weekly_backup_script constant user_scheduler_jobs.job_action%type := 'run { ' || g_weekly_commands|| ' }';
 
   -- The one stop shop for changing the database object names we create
   -- it is a good idea to call scheduler_backup.drop objects before changing names here
@@ -91,7 +89,8 @@ CREATE OR REPLACE PACKAGE SCHEDULER_BACKUP authid current_user as
   --          sure to update the function scheduler_backup_types.initialize_object_list
   --          accordingly
   --
-  g_prefix constant varchar2(20) := 'BACKUP_';
+  prefix_for_naming_objects constant varchar2(20) := 'BACKUP';
+  g_prefix constant varchar2(20) := prefix_for_naming_objects || '_';
   g_daily_worker_name      constant                  user_scheduler_jobs.job_name%type := g_prefix||'WORKER_DAILY';
   g_weekly_worker_name     constant                  user_scheduler_jobs.job_name%type := g_prefix||'WORKER_WEEKLY';
   g_rman_conf_job_name     constant                  user_scheduler_jobs.job_name%type := g_prefix||'RMAN_CONF_JOB';
@@ -100,7 +99,10 @@ CREATE OR REPLACE PACKAGE SCHEDULER_BACKUP authid current_user as
   g_daily_except_sat_name  constant all_scheduler_window_groups.window_group_name%type := g_prefix||'DAILY_NOT_SATURDAY';
   g_daily_job_name         constant                user_scheduler_jobs.job_action%type := g_prefix||'JOB_DAILY';
   g_weekly_job_name        constant                user_scheduler_jobs.job_action%type := g_prefix||'JOB_WEEKLY';
-  g_execute_backup_prgm    constant          user_scheduler_programs.program_name%type := g_prefix||'CHECK_EXECUTE_PRGM';
+  g_chain_job_name         constant                user_scheduler_jobs.job_action%type := g_prefix||'CHAIN_JOB';
+  g_daily_backup_prgm      constant          user_scheduler_programs.program_name%type := g_prefix||'DAILY_PRGM';
+  g_weekly_backup_prgm     constant          user_scheduler_programs.program_name%type := g_prefix||'WEEKLY_PRGM';
+  g_weekly_backup_chain    constant              user_scheduler_chains.chain_name%type := g_prefix||'CHAIN_WEEKLY';
 
 
   -- default for the database role RMAN uses for database connections
@@ -136,6 +138,12 @@ CREATE OR REPLACE PACKAGE SCHEDULER_BACKUP authid current_user as
                   db_password      in varchar2,
                   db_database_role in varchar2 default g_database_role,
                   configure_rman   in boolean  default false);
+
+  -- execute_job_chain is used for weekly backup
+  -- the procedure starts the job chain. The API allows scheduling job chain,
+  -- but the feature does not seem to be implemented. Therefore we have to name
+  -- a procedure in the job
+  procedure execute_job_chain;
 
   -- backup performs some checks of database status and instance to see
   -- if a backup should be made. The reason is to avoid creating backups
@@ -182,14 +190,18 @@ CREATE OR REPLACE PACKAGE SCHEDULER_BACKUP authid current_user as
   procedure drop_objects;
   procedure drop_objects(drop_credentials in boolean);
 
+  -- output through dbms_output.put_line, but only if g_debug_output is set to true
+  procedure debug(p_text in varchar2);
+
   -- the drop_objects procedure of this package will delete all database objects
   -- created by this package. To keep track of the objects created, we fill a
   -- global associative array (g_object_list) with the names of the objects
   -- and their object_type. These are constants to code the object_type
-  k_job        constant scheduler_backup_types.object_type_t := 1;
-  k_program    constant scheduler_backup_types.object_type_t := 2;
-  k_credential constant scheduler_backup_types.object_type_t := 4;
-  k_group      constant scheduler_backup_types.object_type_t := 8;
+  k_job        constant scheduler_backup_types.object_type_t :=  1;
+  k_program    constant scheduler_backup_types.object_type_t :=  2;
+  k_credential constant scheduler_backup_types.object_type_t :=  4;
+  k_group      constant scheduler_backup_types.object_type_t :=  8;
+  k_chain      constant scheduler_backup_types.object_type_t := 16;
 
   C_SKIP_BACKUP_ERR       constant number := -20031;
   C_DISABLE_BACKUP_ERR    constant number := -20032;
@@ -221,7 +233,10 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP_TYPES AS
     ret(scheduler_backup.g_daily_except_sat_name) := scheduler_backup.k_group;
     ret(scheduler_backup.g_daily_job_name)        := scheduler_backup.k_job;
     ret(scheduler_backup.g_weekly_job_name)       := scheduler_backup.k_job;
-    ret(scheduler_backup.g_execute_backup_prgm)   := scheduler_backup.k_program;
+    ret(scheduler_backup.g_chain_job_name)        := scheduler_backup.k_job;
+    ret(scheduler_backup.g_daily_backup_prgm)     := scheduler_backup.k_program;
+    ret(scheduler_backup.g_weekly_backup_prgm)    := scheduler_backup.k_program;
+    ret(scheduler_backup.g_weekly_backup_chain)   := scheduler_backup.k_chain;
     RETURN ret;
   END initialize_object_list;
 
@@ -245,7 +260,7 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
   begin
     -- err if credentials do not exist
     if not credentials_exist then
-      raise_application_error(C_NO_CREDENTIALS_ERR, $$PLSQL_UNIT || '.setup() called without arguments,'
+      raise_application_error(C_NO_CREDENTIALS_ERR, $$PLSQL_UNIT || '.setup called without arguments,'
                                                 || ' but credentials do not exist or are not ENABLED');
     end if;
 
@@ -260,6 +275,7 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
                                 member=>'MONDAY_WINDOW,TUESDAY_WINDOW,WEDNESDAY_WINDOW,' ||
                                         'THURSDAY_WINDOW,FRIDAY_WINDOW,SUNDAY_WINDOW',
                                 comments=>'every day except Saturday');
+    debug($$PLSQL_UNIT||'.setup : created      group '||g_daily_except_sat_name);
   $END
 
     -- create scheduler objects
@@ -270,29 +286,63 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
     -- is architected the same):
     --
     --      JOB                  PROGRAM                 JOB
-    -- g_daily_job_name -> g_execute_backup_prgm -> g_daily_worker_name
+    -- g_daily_job_name -> g_daily_backup_prgm -> g_daily_worker_name
     -- the meaning of '->' is: the right side is invoked by the left side
     --
     -- 1. scheduler starts g_daily_job_name
-    -- 2. g_daily_job_name executes g_execute_backup_prgm and passes the worker job
-    --                              to execute as argument. g_execute_backup_prgm checks
+    -- 2. g_daily_job_name executes g_daily_backup_prgm and passes the worker job
+    --                              to execute as argument. g_daily_backup_prgm checks
     --                              if conditions for executing backups are met.
     -- 3. If conditions are met, g_execute_backup_prgrm executes g_daily_worker_name
     -- 4. g_daily_worker_name performs RMAN backup
 
-    -- only one program is called for daily and weekly backup
-    -- the program receives the worker job as argument.
-    dbms_scheduler.create_program(program_name=>g_execute_backup_prgm,
+    -- the same procedure scheduler_backup.backup is called for daily and weekly backup
+    -- the procedure receives the worker job as argument.
+    dbms_scheduler.create_program(program_name=>g_daily_backup_prgm,
                                   program_type=>'STORED_PROCEDURE',
                                   program_action=>'scheduler_backup.backup',
                                   number_of_arguments=>1,
                                   enabled=>false);
-
-    dbms_scheduler.define_program_argument(program_name=>g_execute_backup_prgm,
+    dbms_scheduler.define_program_argument(program_name=>g_daily_backup_prgm,
                                            argument_position=>1,
                                            argument_type=>'VARCHAR2',
                                            default_value=>g_daily_worker_name);
-    dbms_scheduler.enable(name=>g_execute_backup_prgm);
+    dbms_scheduler.enable(name=>g_daily_backup_prgm);
+    debug($$PLSQL_UNIT||'.setup : created    program '||g_daily_backup_prgm);
+
+    dbms_scheduler.create_program(program_name=>g_weekly_backup_prgm,
+                                  program_type=>'STORED_PROCEDURE',
+                                  program_action=>'scheduler_backup.backup',
+                                  number_of_arguments=>1,
+                                  enabled=>false);
+    dbms_scheduler.define_program_argument(program_name=>g_weekly_backup_prgm,
+                                           argument_position=>1,
+                                           argument_type=>'VARCHAR2',
+                                           default_value=>g_weekly_worker_name);
+    dbms_scheduler.enable(name=>g_weekly_backup_prgm);
+    debug($$PLSQL_UNIT||'.setup : created    program '||g_weekly_backup_prgm);
+
+    -- create scheduler job chain for weekly backups
+    dbms_scheduler.create_chain(chain_name => g_weekly_backup_chain,
+                                rule_set_name => null,
+                                evaluation_interval => null);
+    dbms_scheduler.define_chain_step(chain_name=>g_weekly_backup_chain,
+                                     step_name=>'DAILY_BACKUP_STEP',
+                                     program_name=>g_daily_backup_prgm);
+    dbms_scheduler.define_chain_step(chain_name=>g_weekly_backup_chain,
+                                     step_name=>'WEEKLY_BACKUP_STEP',
+                                     program_name=>g_weekly_backup_prgm);
+    dbms_scheduler.define_chain_rule(chain_name=>g_weekly_backup_chain,
+                                     condition=>'TRUE',
+                                     action=>'start daily_backup_step');
+    dbms_scheduler.define_chain_rule(chain_name=>g_weekly_backup_chain,
+                                     condition=>'daily_backup_step completed',
+                                     action=>'start weekly_backup_step');
+    dbms_scheduler.define_chain_rule(chain_name=>g_weekly_backup_chain,
+                                     condition=>'weekly_backup_step completed',
+                                     action=>'end');
+    dbms_scheduler.enable(name => g_weekly_backup_chain);
+    debug($$PLSQL_UNIT||'.setup : created      chain '||g_weekly_backup_chain);
 
     -- create jobs for DAILY execution
     dbms_scheduler.create_job(job_name => g_daily_worker_name,
@@ -305,22 +355,20 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
     dbms_scheduler.set_attribute(name=>g_daily_worker_name,
                                  attribute=>'CONNECT_CREDENTIAL_NAME',
                                  value=>g_db_credential_name);
+    debug($$PLSQL_UNIT||'.setup : created        job '||g_daily_worker_name);
 
     dbms_scheduler.create_job(job_name=>g_daily_job_name,
-                              program_name=>g_execute_backup_prgm,
+                              program_name=>g_daily_backup_prgm,
                             $IF scheduler_backup.g_use_scheduler_windows $THEN
                               schedule_name => g_daily_except_sat_name,
                             $ELSE
                               start_date => sysdate,
                               repeat_interval => g_daily_repeat_interval,
                             $END
-                              enabled=>false,
+                              enabled=>true,
                               comments=>'execute backup job if conditions are met');
+    debug($$PLSQL_UNIT||'.setup : created        job '||g_daily_job_name);
 
-    dbms_scheduler.set_job_argument_value(job_name=>g_daily_job_name,
-                                          argument_position=>1,
-                                          argument_value=>g_daily_worker_name);
-    dbms_scheduler.enable(name=>g_daily_job_name);
 
     -- create jobs for WEEKLY execution
     dbms_scheduler.create_job(job_name => g_weekly_worker_name,
@@ -333,39 +381,40 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
     dbms_scheduler.set_attribute(name=>g_weekly_worker_name,
                                  attribute=>'CONNECT_CREDENTIAL_NAME',
                                  value=>g_db_credential_name);
+    debug($$PLSQL_UNIT||'.setup : created        job '||g_weekly_worker_name);
 
     dbms_scheduler.create_job(job_name=>g_weekly_job_name,
-                              program_name=>g_execute_backup_prgm,
+                              job_type=>'STORED_PROCEDURE',
+                              job_action=>'scheduler_backup.execute_job_chain',
                             $IF scheduler_backup.g_use_scheduler_windows $THEN
                               schedule_name => 'SATURDAY_WINDOW',
                             $ELSE
                               start_date => sysdate,
                               repeat_interval => g_weekly_repeat_interval,
                             $END
-                              enabled=>false,
+                              enabled=>true,
                               comments=>'execute backup job if conditions are met');
-    dbms_scheduler.set_job_argument_value(job_name=>g_weekly_job_name,
-                                          argument_position=>1,
-                                          argument_value=>g_weekly_worker_name);
-    dbms_scheduler.enable(name=>g_weekly_job_name);
+    debug($$PLSQL_UNIT||'.setup : created        job '||g_weekly_job_name);
 
     -- create RMAN configuration job if needed
     if not configure_rman then
       return;
     end if;
     -- configure rman
+    -- this job is executed once and dropped after execution
+    -- output can be retrieved from all_scheduler_job_run_details
     dbms_scheduler.create_job(job_name => g_rman_conf_job_name,
                               job_type => 'BACKUP_SCRIPT',
                               job_action => g_rman_configuration_commands,
                               credential_name => g_os_credential_name,
                               enabled => false,
-                              auto_drop => false,
+                              auto_drop => true,
                               comments => 'RMAN configuration job');
-
     dbms_scheduler.set_attribute(name=> g_rman_conf_job_name,
                                  attribute=>'CONNECT_CREDENTIAL_NAME',
                                  value=>g_db_credential_name);
-    dbms_scheduler.run_job(g_rman_conf_job_name);
+    dbms_scheduler.enable(name=>g_rman_conf_job_name);
+    debug($$PLSQL_UNIT||'.setup : created        job '||g_rman_conf_job_name);
   end setup;
 
   -- This is the routine to call after the package has been installed. After
@@ -391,29 +440,39 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
 
   end setup;
 
+  -- dbms_scheduler.create_job allows a job_type of 'CHAIN'. But it seems
+  -- this feature is not yet implemented. Therefore we have created a job with
+  -- job_type 'PROCEDURE' and run the chain from here.
+  procedure execute_job_chain is
+  begin
+    dbms_scheduler.run_chain(chain_name => g_weekly_backup_chain,
+                             start_steps => null,
+                             job_name => g_chain_job_name);
+  end;
+
   -- procedure backup is called by daily and weekly backup and receives the name of the
   -- worker job (the one which actually does the RMAN backup) to execute as argument.
   -- some checks are performed to decide if database and instance are in the right state
   -- for backup
   procedure backup (job_to_start in varchar2) is
-    rows integer;
+    numrows integer;
   begin
     -- the job we call must exist and be one of the two worker jobs.
-    select count(*) into rows from user_scheduler_jobs where job_name in (g_daily_worker_name,g_weekly_worker_name)
-                                                             and job_name=job_to_start;
-    if SQL%NOTFOUND then
+    select count(*) into numrows from user_scheduler_jobs where job_name in (g_daily_worker_name,g_weekly_worker_name)
+                                                            and job_name=job_to_start;
+    if numrows != 1 then
       raise_application_error(C_WRONG_JOB_NAME_ERR,    $$PLSQL_UNIT || '.backup: '
              || 'Job ''' || job_to_start || ''' does not exist '
              || 'or is not one of '||g_daily_worker_name||','||g_weekly_worker_name);
     end if;
-    --dbms_output.put_line('job_name : '||job_to_start||' rows : '||rows);
+    -- debug('job_name : '||job_to_start||' rows : '||numrows);
     -- only make backups if instance and database meet certain conditions
-    select count(*) into rows
-    from v$instance i, v$database d
-    where i.status!='OPEN' or i.logins!='ALLOWED' or i.shutdown_pending!='NO'
-      or i.database_status!='ACTIVE' or i.active_state!='NORMAL' or d.log_mode!='ARCHIVELOG';
-    if rows!=0 then
-      -- status check failed
+    select count(*) into numrows
+      from v$instance
+         where    status!='OPEN' or logins!='ALLOWED' or shutdown_pending!='NO'
+               or database_status!='ACTIVE' or active_state!='NORMAL';
+    if numrows > 0 then
+    -- status check failed
       $IF scheduler_backup.g_disable_after_failed_check $THEN
         -- permanently disable backups until someone calls scheduler_backup.enable
         scheduler_backup.disable;
@@ -429,15 +488,15 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
 
   -- guess what this does
   function credentials_exist return boolean is
-    rows integer;
+    numrows integer;
   begin
-    select count(*) into rows
+    select count(*) into numrows
     from user_credentials
     where
         credential_name in (g_os_credential_name, g_db_credential_name)
       and
         enabled='TRUE';
-    if rows != 2 then
+    if numrows != 2 then
         return false;
     end if;
     return true;
@@ -506,6 +565,7 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
                                         password => os_password,
                                         enabled => true,
                                         comments => 'OS credentials for backup jobs');
+      debug($$PLSQL_UNIT||'.setup : created credential '||g_os_credential_name);
 
       dbms_credential.create_credential(credential_name => g_db_credential_name,
                                         username => db_username,
@@ -513,6 +573,7 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
                                         database_role => g_database_role,
                                         enabled => true,
                                         comments => 'DB credentials for backup jobs');
+      debug($$PLSQL_UNIT||'.setup : created credential '||g_db_credential_name);
 
     end create_credentials;
 
@@ -532,16 +593,27 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
     setup;
   end enable;
 
+  procedure debug(p_text in varchar2) is
+  begin
+    $IF scheduler_backup.g_debug_output $THEN
+      dbms_output.put_line(p_text);
+    $ELSE
+      null;
+    $END
+  end;
+
   -- display status of the objects we created
   function status return stringset_t pipelined is
     type job_list_t        is table of        user_scheduler_jobs%rowtype index by binary_integer;
     type prgm_list_t       is table of    user_scheduler_programs%rowtype index by binary_integer;
     type credential_list_t is table of user_scheduler_credentials%rowtype index by binary_integer;
     type group_list_t      is table of       all_scheduler_groups%rowtype index by binary_integer;
+    type chain_list_t      is table of      user_scheduler_chains%rowtype index by binary_integer;
     job_list          job_list_t;
     prgm_list        prgm_list_t;
     cred_list  credential_list_t;
     group_list      group_list_t;
+    chain_list      chain_list_t;
     l_row            pls_integer;
   begin
     select * bulk collect into job_list from user_scheduler_jobs where job_name like g_prefix||'%';
@@ -565,6 +637,13 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
       pipe row('     group : '||group_list(l_row).group_name||', enabled: '||group_list(l_row).enabled);
       l_row := group_list.next(l_row);
     end loop;
+    select * bulk collect into chain_list from user_scheduler_chains where chain_name like g_prefix||'%';
+    l_row := chain_list.first;
+    while (l_row is not null)
+    loop
+      pipe row('     chain : '||chain_list(l_row).chain_name||', enabled: '||chain_list(l_row).enabled);
+      l_row := chain_list.next(l_row);
+    end loop;
     select * bulk collect into cred_list from user_scheduler_credentials where credential_name like g_prefix||'%';
     l_row := cred_list.first;
     while (l_row is not null)
@@ -583,7 +662,7 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
   end drop_objects;
 
   procedure drop_objects(drop_credentials in boolean) is
-  rows integer;
+  numrows integer;
   object_name user_scheduler_jobs.job_name%type;
   begin
 
@@ -592,31 +671,38 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
     loop
       case g_object_list(object_name)
         when k_job then
-          select count(*) into rows from user_scheduler_jobs where job_name=object_name;
-          if rows > 0 then
+          select count(*) into numrows from user_scheduler_jobs where job_name=object_name;
+          if numrows > 0 then
             dbms_scheduler.drop_job(job_name=>object_name, force=>true);
-            dbms_output.put_line($$PLSQL_UNIT||'.drop_objects: deleted '||object_name||' of type JOB');
+            debug($$PLSQL_UNIT||'.drop_objects: deleted        job '||object_name);
           end if;
 
         when k_program then
-          select count(*) into rows from user_scheduler_programs where program_name=object_name;
-          if rows > 0 then
+          select count(*) into numrows from user_scheduler_programs where program_name=object_name;
+          if numrows > 0 then
             dbms_scheduler.drop_program(program_name=>object_name, force=>true);
-            dbms_output.put_line($$PLSQL_UNIT||'.drop_objects: deleted '||object_name||' of type PROGRAM');
+            debug($$PLSQL_UNIT||'.drop_objects: deleted    program '||object_name);
           end if;
 
         when k_group then
-          select count(*) into rows from user_scheduler_groups where group_name=object_name;
-          if rows > 0 then
+          select count(*) into numrows from user_scheduler_groups where group_name=object_name;
+          if numrows > 0 then
             dbms_scheduler.drop_group(group_name=>object_name, force=>true);
-            dbms_output.put_line($$PLSQL_UNIT||'.drop_objects: deleted '||object_name||' of type GROUP');
+            debug($$PLSQL_UNIT||'.drop_objects: deleted      group '||object_name);
+          end if;
+
+        when k_chain then
+          select count(*) into numrows from user_scheduler_chains where chain_name=object_name;
+          if numrows > 0 then
+            dbms_scheduler.drop_chain(chain_name=>object_name, force=>true);
+            debug($$PLSQL_UNIT||'.drop_objects: deleted      chain '||object_name);
           end if;
 
         when k_credential then
-          select count(*) into rows from user_credentials where credential_name=object_name;
-          if rows > 0 and drop_credentials then
+          select count(*) into numrows from user_credentials where credential_name=object_name;
+          if numrows > 0 and drop_credentials then
             dbms_credential.drop_credential(credential_name => object_name, force => true);
-            dbms_output.put_line($$PLSQL_UNIT||'.drop_objects: deleted '||object_name||' of type CREDENTIAL');
+            debug($$PLSQL_UNIT||'.drop_objects: deleted credential '||object_name);
           end if;
       end case;
 
