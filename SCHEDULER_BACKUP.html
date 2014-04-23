@@ -39,6 +39,16 @@
 <td>
 <div class="topstoryhead"><strong>The PL/SQL Package SCHEDULER_BACKUP</strong></div>
 <div class="boldbodycopy c2">Author: Ralf Lange, ORACLE Deutschland B.V. &amp; Co. KG</div>
+<p class="boldbodycopy"><strong>Sections</strong></p>
+<ul>
+<li><a href="#INTROD">Introduction</a></li>
+<li><a href="#PREREQ">Prerequisites</a></li>
+<li><a href="#INSTAL">Installation and Setup</a></li>
+<li><a href="#HANDLI">Handling the DBMS_SCHEDULER Package</a></li>
+<li><a href="#DEINST">Deinstalling the DBMS_SCHEDULER Package</a></li>
+<li><a href="#THEPLS">The PL/SQL Package DBMS_SCHEDULER on Sourceforge, Links to Oracle Documentation</a></li>
+</ul>
+<a id="INTROD" name="INTROD"></a>
 <p class="boldbodycopy"><strong>Introduction</strong></p>
 <p class="bodycopy">
 The release of Oracle 12c introduced so many new features that I initially missed the introduction of three new job types in the <strong><tt>DBMS_SCHEDULER</tt></strong> PL/SQL package.
@@ -58,6 +68,7 @@ Scheduler job types the package works regardless if the operating system of the 
 backups are written to the Fast Recovery Area (FRA) if one is configured. If not, the default location is the <strong><tt>dbs</tt></strong> (Linux/Unix) or
 the <strong><tt>database</tt></strong> (Windows) subdirectory of the <strong><tt>ORACLE_HOME</tt></strong>.
 </p>
+<a id="PREREQ" name="PREREQ"></a>
 <p class="boldbodycopy"><strong>Prerequisites</strong></p>
 <p class="bodycopy">
 <ul>
@@ -65,6 +76,7 @@ the <strong><tt>database</tt></strong> (Windows) subdirectory of the <strong><tt
  <li>a text editor and SQL*Plus (or SQL Developer)</li>
 </ul>
 </p>
+<a id="INSTAL" name="INSTAL"></a>
 <p class="boldbodycopy"><strong>Installation and Setup</strong></p>
 <p class="bodycopy">
 To install, run the provided file <strong><tt>SCHEDULER_BACKUP.sql</tt></strong> through SQL*Plus:
@@ -178,6 +190,7 @@ necessary to call setup from a restricted session and to restart the instance af
 Once the <strong><tt>SETUP</tt></strong> procedure has been provided with the account information, the procedure can be called without any arguments. This will recreate all objects
 except the credentials. So if you change anything in the package and recompile, just call <strong><tt>SETUP</tt></strong> again without any arguments to implement the changes.
 </p>
+<a id="HANDLI" name="HANDLI"></a>
 <p class="boldbodycopy"><strong>Handling the <tt>DBMS_SCHEDULER</tt> Package</strong></p>
 <p class="bodycopy">
 Now that backups run from jobs started by the scheduler, how can the output of the RMAN sessions be retrieved or the the success and failure of jobs be monitored?<br>
@@ -222,7 +235,24 @@ as <strong><tt>BLOB</tt></strong>. An easy way to make the output visible is to 
 More queries and calls of <strong><tt>SCHEDULER_BACKUP</tt></strong> procedures are in the file <strong><tt>schedulernew.sql</tt></strong> that is delivered with
 this package. I recommend opening <strong><tt>schedulernew.sql</tt></strong> in SQL Developer and execute the commands from there. 
 </p>
-<p class="boldbodycopy">N&uuml;tzliche Links und Referenzen</p>
+<a id="DEINST" name="DEINST"></a>
+<p class="boldbodycopy"><strong>Deinstalling the <tt>DBMS_SCHEDULER</tt> Package</strong></p>
+<p class="bodycopy">
+Why would you want that? If you really need to, start by removing all objects the package has created:
+</p>
+<pre class="dba_community_code">
+-- drops all objects scheduler_backup.setup has created
+SQL*Plus> exec scheduler_backup.drop_objects;
+</pre>
+<p class="bodycopy">
+Then drop the two packages:
+</p>
+<pre class="dba_community_code">
+SQL*Plus> drop package scheduler_backup;
+SQL*Plus> drop package scheduler_backup_types;
+</pre>
+<a id="THEPLS" name="THEPLS"></a>
+<p class="boldbodycopy"><strong>The PL/SQL Package <tt>SCHEDULER_BACKUP</tt> on Sourceforge, Links to Oracle Documentation</strong></p>
 <p class="bodylink"></p>
 <ul>
 <li><a href="http://sourceforge.net/projects/rmanscheduler/files/" class="bodylink" target="_blank"><strong>The PL/SQL Package <tt>SCHEDULER_BACKUP</tt> on Sourceforge</strong></a></li>
