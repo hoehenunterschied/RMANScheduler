@@ -38,7 +38,7 @@
 <tr class="bodycopy">
 <td>
 <div class="topstoryhead"><strong>The PL/SQL Package SCHEDULER_BACKUP</strong></div>
-<div class="boldbodycopy c2">Author: Ralf Lange, ORACLE Deutschland B.V. &amp; Co. KG</div>
+<div class="boldbodycopy c2">Ralf Lange, ORACLE Deutschland B.V. &amp; Co. KG</div>
 <p class="boldbodycopy"><strong>Sections</strong></p>
 <ul>
 <li><a href="#INTROD">Introduction</a></li>
@@ -197,8 +197,8 @@ Now that backups run from jobs started by the scheduler, how can the output of t
 To get a list of the objects that have been created by the <strong><tt>SETUP</tt></strong> procedure, use this query:
 </p>
 <pre class="dba_community_code">
-SQL*Plus> -- query status of scheduler objects scheduler_backup has created
-SQL*Plus> select * from table(scheduler_backup.status);
+-- query status of scheduler objects scheduler_backup has created
+select * from table(scheduler_backup.status);
 
 COLUMN_VALUE
 -----------------------------------------------------
@@ -232,6 +232,28 @@ The column <strong><tt>BINARY_OUTPUT</tt></strong> of <strong><tt>ALL_SCHEDULER_
 as <strong><tt>BLOB</tt></strong>. An easy way to make the output visible is to execute the query from a worksheet in SQL Developer and double click into the
 <strong><tt>(BLOB)</tt></strong> field of the output. This opens a pop-up revealing the text after checking the 'Text' checkbox.<br>
 <br>
+<p class="bodycopy">
+Two procedures disable further executions of backups and re-enable them again. The current <tt>SCHEDULER_BACKUP.DISABLE</tt>
+implementation deletes all scheduler objects this package has created except the Credentials.
+<tt>SCHEDULER_BACKUP.ENABLE</tt> just calls <tt>SCHEDULER_BACKUP.SETUP</tt> without parameters, thereby recreating
+scheduler objects.
+</p>
+<pre class="dba_community_code">
+exec dbms_scheduler.disable;
+exec dbms_scheduler.enable;
+</pre><br>
+<p class="bodycopy">
+Credentials can be modified. This most commonly applies to password changes, but it is also possible to change the operating system
+account which executes RMAN or the database account RMAN connects to. If the credentials do not exist, but enough information
+has been provided to create new ones, new Credentials are created.
+</p>
+<pre class="dba_community_code">
+begin
+  scheduler_backup.modify_credentials(os_username=>'oracle',os_password=>'iknowit',
+                                      db_username=>'sys',db_password=>'iknowitalso');
+end;
+/
+</pre><br>
 More queries and calls of <strong><tt>SCHEDULER_BACKUP</tt></strong> procedures are in the file <strong><tt>schedulernew.sql</tt></strong> that is delivered with
 this package. I recommend opening <strong><tt>schedulernew.sql</tt></strong> in SQL Developer and execute the commands from there. 
 </p>
@@ -242,14 +264,14 @@ Why would you want that? If you really need to, start by removing all objects th
 </p>
 <pre class="dba_community_code">
 -- drops all objects scheduler_backup.setup has created
-SQL*Plus> exec scheduler_backup.drop_objects;
+exec scheduler_backup.drop_objects;
 </pre>
 <p class="bodycopy">
 Then drop the two packages:
 </p>
 <pre class="dba_community_code">
-SQL*Plus> drop package scheduler_backup;
-SQL*Plus> drop package scheduler_backup_types;
+drop package scheduler_backup;
+drop package scheduler_backup_types;
 </pre>
 <a id="THEPLS" name="THEPLS"></a>
 <p class="boldbodycopy"><strong>The PL/SQL Package <tt>SCHEDULER_BACKUP</tt> on Sourceforge, Links to Oracle Documentation</strong></p>
@@ -268,8 +290,5 @@ SQL*Plus> drop package scheduler_backup_types;
 </tr>
 </tbody>
 </table>
-<script type="text/javascript">
-  preLoadImages();
-</script>
 </body>
 </html>
