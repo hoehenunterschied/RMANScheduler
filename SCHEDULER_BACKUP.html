@@ -1,0 +1,245 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html lang="de">
+<head>
+<meta name="generator" content="HTML Tidy for Linux (vers 25 March 2009), see www.w3.org">
+<meta name="keywords" content="RMAN, 12c, scheduler">
+<meta name="date" content="2014-05-02T12:00:00+01:00">
+<meta name="author" content="Ralf Lange, ORACLE Deutschland GmbH &amp; Co. KG">
+<meta name="description" content="The PL/SQL Package SCHEDULER_BACKUP">
+<meta http-equiv="content-type" content="text/html; charset=utf-8">
+<meta http-equiv="content-language" content="de">
+<meta name="robots" content="index, nofollow">
+<title>The PL/SQL Package SCHEDULER_BACKUP</title>
+
+<style type="text/css">
+   .dba_community_code{
+     border-color: black; 
+     border-style: solid; 
+     border-width: 0.5pt; 
+     width: 900;
+     padding: 0.1cm;
+     background-color: rgb(255,255,215);
+     margin-left: 2cm;
+     font-weight: bold;}
+   .gelb {background:yellow;color:red;font-weight:bold;}
+</style>
+
+<style type="text/css">
+ body.c5 {background-color: rgb(255, 255, 255);}
+ table.c4 {width: 100%;}
+ li.c3 {list-style: none}
+ div.c2 {margin-top: 5px}
+ div.c1 {width: 100%; vertical-align: middle; padding: 5px; border-bottom: 1px solid gray; margin-bottom: 10px}
+</style>
+</head>
+<body class="c5">
+<table class="c4" summary="" border="0" cellpadding="1" cellspacing="10">
+<tbody>
+<tr class="bodycopy">
+<td>
+<div class="topstoryhead"><strong>The PL/SQL Package SCHEDULER_BACKUP</strong></div>
+<div class="boldbodycopy c2">Author: Ralf Lange, ORACLE Deutschland B.V. &amp; Co. KG</div>
+<p class="boldbodycopy"><strong>Introduction</strong></p>
+<p class="bodycopy">
+The release of Oracle 12c introduced so many new features that I initially missed the introduction of three new job types in the <strong><tt>DBMS_SCHEDULER</tt></strong> PL/SQL package.
+These job types were:
+<ul>
+ <li><strong><tt>SHELL_SCRIPT</tt></strong></li>
+ <li><strong><tt>SQL_SCRIPT</tt></strong></li>
+ <li><strong><tt>BACKUP_SCRIPT</tt></strong></li>
+</ul>
+The job types are what one would assume considering their name. They offer a huge advantage over pre 12c RMAN automation efforts: They enable RMAN backup automization completely from
+inside the database and in a operating system independent manner. Just by creating some Scheduler objects in the database.<br>
+<br>
+While some scheduler objects (Jobs, Programs, Schdules, Credentials) in the database are sufficient to have backups taken at specified times, more is needed to implement a
+backup strategy. One will want to be able to change passwords, monitor success or failure of backup jobs, temporarily suspend backups etc.<br>
+I have created the PL/SQL package <strong><tt>SCHEDULER_BACKUP</tt></strong> to help implementing an often used backup strategy: Daily and Weekly backups. Thanks to the new
+Scheduler job types the package works regardless if the operating system of the database server is Linux, Unix or Windows. By RMAN default, and the package does not change that,
+backups are written to the Fast Recovery Area (FRA) if one is configured. If not, the default location is the <strong><tt>dbs</tt></strong> (Linux/Unix) or
+the <strong><tt>database</tt></strong> (Windows) subdirectory of the <strong><tt>ORACLE_HOME</tt></strong>.
+</p>
+<p class="boldbodycopy"><strong>Prerequisites</strong></p>
+<p class="bodycopy">
+<ul>
+ <li>Oracle Database 12c</li>
+ <li>a text editor and SQL*Plus (or SQL Developer)</li>
+</ul>
+</p>
+<p class="boldbodycopy"><strong>Installation and Setup</strong></p>
+<p class="bodycopy">
+To install, run the provided file <strong><tt>SCHEDULER_BACKUP.sql</tt></strong> through SQL*Plus:
+</p>
+<pre class="dba_community_code">
+SQL*Plus> sqlplus / as sysdba @SCHEDULER_BACKUP.sql
+</pre>
+<p class="bodycopy">
+This will create and compile two packages in the database: The main package <strong><tt>SCHEDULER_BACKUP</tt></strong> and a small helper package
+<strong><tt>SCHEDULER_BACKUP_TYPES</tt></strong>. The previous step was only to make sure that the installation works without producing errors or warnings. We need to
+recompile the package every time we change the configuration. There are various options of how to edit and compile PL/SQL packages. You can change the file
+<strong><tt>SCHEDULER_BACKUP.sql</tt></strong> with a text editor and rerun it through SQL*Plus, or you can work on the package in SQL Developer. 
+To configure the package, find the following code segment in the Package Specification of <strong><tt>SCHEDULER_BACKUP</tt></strong>:
+</p>
+<pre class="dba_community_code">
+  -- RMAN commands for daily backup
+  g_daily_commands constant varchar2(400) :=
+         'backup check logical incremental level 1 for recover of copy with tag ''daily incr'' database;'
+      || 'recover copy of database with tag ''daily incr'' until time ''sysdate-3'';'
+      || 'backup check logical as compressed backupset archivelog all not backed up delete all input;';
+
+  -- RMAN commands for weekly backup
+  g_weekly_commands constant varchar2(400) :=
+         'backup check logical as compressed backupset database tag ''full backup'';'
+      || 'backup check logical as compressed backupset archivelog all not backed up delete all input;'
+      || 'delete noprompt obsolete;';
+
+  -- RMAN configuration commands
+  -- NOTE: RMAN configuration is only done if one of the dbms_scheduler.setup
+  --       routines is called with Parameter rman_configuration=>true
+  g_rman_configuration_commands constant varchar2(400) :=
+         'configure retention policy to recovery window of 30 days;'
+      || 'configure backup optimization off;'
+      || 'configure default device type to disk;'
+      || 'configure controlfile autobackup on;'
+      || 'configure device type disk parallelism 1 backup type to compressed backupset;'
+      || 'configure compression algorithm ''HIGH'' as of release ''DEFAULT'' optimize for load true;';
+</pre>
+<p class="bodycopy">
+Obviously, the preceding code segment shows the RMAN commands for daily and weekly backup and commands to configure RMAN. Edit these to suit your needs. Be careful
+with quotes and the string continuation sign. You see from the example how it works. Next, edit the schedule. This code segment is just below the RMAN commands:
+</p>
+<pre class="dba_community_code">
+  -- the repeat interval for daily and weekly backup
+  -- NOTE: No daily backup on Saturday because we have a Job Chain for Saturday
+  --       that starts jobs for daily and weekly backups
+  g_daily_repeat_interval constant user_scheduler_jobs.repeat_interval%type :=
+                                              'freq=daily;byday=MON,TUE,WED,THU,FRI,SUN;byhour=5;byminute=10';
+  g_weekly_repeat_interval constant user_scheduler_jobs.repeat_interval%type :=
+                                              'freq=daily;byday=SAT;byhour=5;byminute=10';
+</pre>
+<p class="bodycopy">
+most likely you will not want your backups to start at 05:10 in the morning. In case you don't want to start the backup jobs by schedule at all, you can have them started
+in the Maintenance Windows defined by the Oracle Database. You will find this section in the Package Specification of <strong><tt>SCHEDULER_BACKUP</tt></strong>:
+</p>
+<pre class="dba_community_code">
+  -- this flag switches between schedules defined by g_{daily|weekly}_repeat_interval
+  -- and windows based scheduling
+  --
+  -- windows based schedule : Backups happen during the nightly and weekend maintenance window
+  --
+  --               schedule : Backups happen according to schedule defined in this package
+  --
+  -- after changing the value, recompile and call scheduler_backup.setup without arguments
+  -- to leave the credentials untouched but to recreate the other scheduler objects
+  g_use_scheduler_windows constant boolean := false;
+</pre>
+<p class="bodycopy">
+So if you want to run the backup jobs during the maintenance windows, set <strong><tt>g_use_scheduler_windows</tt></strong> to <strong><tt>true</tt></strong>.
+There is one important difference between scheduling by window or by time: A job that is associated with a window is only started when the window is open. To put it
+to an extreme, imagine a database that is shut down every evening before the window opens and is started in the morning after the window is closed. None of the jobs
+associated with the window will ever be executed, due to the rule that a job is only started when the associated window is open (windows can be opened manually by
+calling <strong><tt>DBMS_SCHEDULER.OPEN_WINDOW</tt></strong>).<br>
+When scheduling by time, a job that could not be started by the scheduler because the database was closed at the scheduled time, is started as soon as the database is opened
+again.<br><br>
+To enable debug output from the package, make sure <strong><tt>set serveroutput on</tt></strong> has been set in your session and that the package has been compiled with
+this flag set to true:
+</p>
+<pre class="dba_community_code">
+  -- if true some routines use dbms_output.put_line
+  g_debug_output constant boolean := true;
+</pre>
+<p class="bodycopy">
+Backup Jobs perform a check to decide if a backup should be performed or not. The flag <strong><tt>g_disable_after_failed_check</tt></strong> controls the behavior when
+the check fails. See the comment in the following code segment of the Package Specification of <strong><tt>SCHEDULER_BACKUP</tt></strong>:
+</p>
+<pre class="dba_community_code">
+  -- scheduler_backup.backup only runs the backup job after
+  -- a check of instance and database state.
+  -- this flag controls what happens after the check fails:
+  -- true : backups are permanently disabled until someone calls scheduler_backup.enable
+  -- false: only the backup scheduled to run at the time of check is skipped.
+  g_disable_after_failed_check constant boolean := false;
+</pre>
+<p class="bodycopy">
+If you have gone through the above configuration, compile the package and create the scheduler objects by calling the <strong><tt>SETUP</tt></strong> procedure of
+<strong><tt>SCHEDULER_BACKUP</tt></strong>. The <strong><tt>SETUP</tt></strong> procedure needs information about the operating system account that will execute
+RMAN and the database account RMAN will connect to:
+</p>
+<pre class="dba_community_code">
+begin
+  scheduler_backup.setup(os_username=>'oracle',os_password=>'onlyiknowit',
+                         db_username=>'sys',db_password=>'onlyiknowthisonealso');
+end;
+/
+</pre>
+<p class="bodycopy">
+this will allow the setup routine to create the Credentials for OS and DB access. Credentials are a way to let someone access something without having them to know the password.<br>
+<strong>Caution:</strong> Queries of <strong><tt>GV$SQL</tt></strong> will reveal the above command exposing the passwords in clear text. According to your security demands it might be
+necessary to call setup from a restricted session and to restart the instance afterwards.<br>
+Once the <strong><tt>SETUP</tt></strong> procedure has been provided with the account information, the procedure can be called without any arguments. This will recreate all objects
+except the credentials. So if you change anything in the package and recompile, just call <strong><tt>SETUP</tt></strong> again without any arguments to implement the changes.
+</p>
+<p class="boldbodycopy"><strong>Handling the <tt>DBMS_SCHEDULER</tt> Package</strong></p>
+<p class="bodycopy">
+Now that backups run from jobs started by the scheduler, how can the output of the RMAN sessions be retrieved or the the success and failure of jobs be monitored?<br>
+To get a list of the objects that have been created by the <strong><tt>SETUP</tt></strong> procedure, use this query:
+</p>
+<pre class="dba_community_code">
+SQL*Plus> -- query status of scheduler objects scheduler_backup has created
+SQL*Plus> select * from table(scheduler_backup.status);
+
+COLUMN_VALUE
+-----------------------------------------------------
+       job : BACKUP_JOB_DAILY, enabled: TRUE
+       job : BACKUP_JOB_WEEKLY, enabled: TRUE
+       job : BACKUP_WORKER_DAILY, enabled: FALSE
+       job : BACKUP_WORKER_WEEKLY, enabled: FALSE
+   program : BACKUP_DAILY_PRGM, enabled: TRUE
+   program : BACKUP_WEEKLY_PRGM, enabled: TRUE
+     chain : BACKUP_CHAIN_WEEKLY, enabled: TRUE
+credential : BACKUP_DB_CREDENTIAL
+credential : BACKUP_OS_CREDENTIAL
+
+9 rows selected.
+</pre>
+<p class="bodycopy">
+The two <strong><tt>WORKER</tt></strong> Jobs above are disabled intentionally: They are not directly started by the scheduler.<br><br>
+To query the state of jobs from <strong><tt>all_scheduler_jobs</tt></strong>:
+</p>
+<pre class="dba_community_code">
+select job_name,owner,state,next_run_date from all_scheduler_jobs where job_name like 'BACKUP_%';
+</pre><br>
+<p class="bodycopy">
+To see the success or failure of previous job runs, use this query:
+</p>
+<pre class="dba_community_code">
+select log_id,job_name,status,binary_output,log_date,run_duration from all_scheduler_job_run_details order by log_date desc;
+</pre>
+<p class="bodycopy">
+The column <strong><tt>BINARY_OUTPUT</tt></strong> of <strong><tt>ALL_SCHEDULER_JOB_RUN_DETAILS</tt></strong> contains the RMAN output of the <strong><tt>WORKER</tt></strong> Jobs
+as <strong><tt>BLOB</tt></strong>. An easy way to make the output visible is to execute the query from a worksheet in SQL Developer and double click into the
+<strong><tt>(BLOB)</tt></strong> field of the output. This opens a pop-up revealing the text after checking the 'Text' checkbox.<br>
+<br>
+More queries and calls of <strong><tt>SCHEDULER_BACKUP</tt></strong> procedures are in the file <strong><tt>schedulernew.sql</tt></strong> that is delivered with
+this package. I recommend opening <strong><tt>schedulernew.sql</tt></strong> in SQL Developer and execute the commands from there. 
+</p>
+<p class="boldbodycopy">N&uuml;tzliche Links und Referenzen</p>
+<p class="bodylink"></p>
+<ul>
+<li><a href="http://sourceforge.net/projects/rmanscheduler/files/" class="bodylink" target="_blank"><strong>The PL/SQL Package <tt>SCHEDULER_BACKUP</tt> on Sourceforge</strong></a></li>
+<li><a href="http://docs.oracle.com/cd/E16655_01/appdev.121/e17602/d_sched.htm#ARPLS72235" class="bodylink" target="_blank">Oracle 12c Online Documentation: DBMS_SCHEDULER in "PL/SQL Packages and Types Reference"</a></li>
+<li><a href="http://docs.oracle.com/cd/E16655_01/appdev.121/e17602/d_credential.htm#ARPLS73499" class="bodylink" target="_blank">Oracle 12c Online Documentation: DBMS_CREDENTIAL in "PL/SQL Packages and Types Reference"</a></li>
+<li><a href="http://docs.oracle.com/cd/E16655_01/server.121/e17636/schedover.htm#ADMIN033" class="bodylink" target="_blank">Oracle 12c Online Documentation: Oracle Scheduler Concepts in "Administrator's Guide"</a></li>
+<li><a href="http://docs.oracle.com/cd/E16655_01/server.121/e17636/scheduse.htm#ADMIN034" class="bodylink" target="_blank">Oracle 12c Online Documentation: Scheduling Jobs with Oracle Scheduler in "Administrator's Guide"</a></li>
+<li><a href="http://docs.oracle.com/cd/E16655_01/server.121/e17636/schedadmin.htm#ADMIN035" class="bodylink" target="_blank">Oracle 12c Online Documentation: Administering Oracle Scheduler in "Administrator's Guide"</a></li>
+<li class="c3"><br>
+<br></li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+<script type="text/javascript">
+  preLoadImages();
+</script>
+</body>
+</html>
