@@ -203,6 +203,9 @@ CREATE OR REPLACE PACKAGE SCHEDULER_BACKUP authid current_user as
   k_group      constant scheduler_backup_types.object_type_t :=  8;
   k_chain      constant scheduler_backup_types.object_type_t := 16;
 
+  -- used to format names. Must be longer than the longest name
+  g_len constant integer := 26;
+
   C_SKIP_BACKUP_ERR       constant number := -20031;
   C_DISABLE_BACKUP_ERR    constant number := -20032;
   C_WRONG_JOB_NAME_ERR    constant number := -20033;
@@ -606,7 +609,7 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
   function status return stringset_t pipelined is
     type job_list_t        is table of        user_scheduler_jobs%rowtype index by binary_integer;
     type prgm_list_t       is table of    user_scheduler_programs%rowtype index by binary_integer;
-    type credential_list_t is table of user_scheduler_credentials%rowtype index by binary_integer;
+    type credential_list_t is table of            all_credentials%rowtype index by binary_integer;
     type group_list_t      is table of       all_scheduler_groups%rowtype index by binary_integer;
     type chain_list_t      is table of      user_scheduler_chains%rowtype index by binary_integer;
     job_list          job_list_t;
@@ -620,37 +623,45 @@ CREATE OR REPLACE PACKAGE BODY SCHEDULER_BACKUP as
     l_row := job_list.first;
     while (l_row is not null)
     loop
-      pipe row('       job : '||job_list(l_row).job_name||', enabled: '||job_list(l_row).enabled);
+      pipe row('       job '||rpad(job_list(l_row).job_name,g_len)||' enabled: '||job_list(l_row).enabled);
       l_row := job_list.next(l_row);
     end loop;
     select * bulk collect into prgm_list from user_scheduler_programs where program_name like g_prefix||'%';
     l_row := prgm_list.first;
     while (l_row is not null)
     loop
-      pipe row('   program : '||prgm_list(l_row).program_name||', enabled: '||prgm_list(l_row).enabled);
+      pipe row('   program '||rpad(prgm_list(l_row).program_name,g_len)||' enabled: '||prgm_list(l_row).enabled);
       l_row := prgm_list.next(l_row);
     end loop;
     select * bulk collect into group_list from all_scheduler_groups where group_name like g_prefix||'%';
     l_row := group_list.first;
     while (l_row is not null)
     loop
-      pipe row('     group : '||group_list(l_row).group_name||', enabled: '||group_list(l_row).enabled);
+      pipe row('     group '||rpad(group_list(l_row).group_name,g_len)||' enabled: '||group_list(l_row).enabled);
       l_row := group_list.next(l_row);
     end loop;
     select * bulk collect into chain_list from user_scheduler_chains where chain_name like g_prefix||'%';
     l_row := chain_list.first;
     while (l_row is not null)
     loop
-      pipe row('     chain : '||chain_list(l_row).chain_name||', enabled: '||chain_list(l_row).enabled);
+      pipe row('     chain '||rpad(chain_list(l_row).chain_name,g_len)||' enabled: '||chain_list(l_row).enabled);
       l_row := chain_list.next(l_row);
     end loop;
-    select * bulk collect into cred_list from user_scheduler_credentials where credential_name like g_prefix||'%';
+    select * bulk collect into cred_list from all_credentials where credential_name like g_prefix||'%';
     l_row := cred_list.first;
     while (l_row is not null)
     loop
-      pipe row('credential : '||cred_list(l_row).credential_name);
+      pipe row('credential '||rpad(cred_list(l_row).credential_name,g_len)||' enabled: '||cred_list(l_row).enabled);
       l_row := cred_list.next(l_row);
     end loop;
+    
+    -- check if block change tracking is active in EE databases
+    select count(*) into l_row from v$instance i, v$block_change_tracking b
+                               where i.edition='EE' and b.status != 'ENABLED';
+    if l_row != 0 then
+      pipe row('please consider ''alter database enable block change tracking [using file ''...''];''');
+    end if;
+    
     return;
   end status;
 
