@@ -129,9 +129,32 @@ exec dbms_scheduler.run_job(job_name=>'BACKUP_JOB_WEEKLY',use_current_session=>f
 select output from gv$rman_output where session_recid=(select max(session_recid) from v$rman_status) order by recid;
 select SID, START_TIME,TOTALWORK, sofar, round((sofar/totalwork) * 100,2) "% done",sysdate + TIME_REMAINING/3600/24 end_at from gv$session_longops where totalwork > sofar AND opname NOT LIKE '%aggregate%' AND opname like 'RMAN%';
 
-desc scheduler_backup;
-select * from v$nls_parameters;
-
+-- show state and next execution for jobs
+select job_name,owner,STATE,NEXT_RUN_DATE,all_scheduler_jobs.* from all_scheduler_jobs where job_name like 'BACKUP_%' /*and owner='SYS'/**/;
+-- show details about job runs
+select log_id,job_name,status,binary_output,log_date,run_duration from all_scheduler_job_run_details where job_name like 'BACKUP_%'/**/ order by log_date desc;
+-- to see RMAN output from previous executions in SQL*Plus
+-- first query all_scheduler_job_run_details (where binary_output is not null and job_name like 'BACKUP_%')
+-- and note the log_id from the run the output should be dsiplayed from
+--  then assign the log_id value to the lid variable below.
+select log_id,job_name,status,log_date,run_duration from all_scheduler_job_run_details where binary_output is not null and job_name like 'BACKUP_%' order by log_date desc;
+declare
+  lid integer := 22514;
+  length integer;
+  offset integer := 1;
+  chunk_size constant integer := 2000;
+  lob_rec all_scheduler_job_run_details%rowtype;
+begin
+  select * into lob_rec from all_scheduler_job_run_details where  log_id=lid;
+  length := dbms_lob.getlength(lob_rec.binary_output);
+  while offset < length loop
+    dbms_output.put(utl_raw.cast_to_varchar2(dbms_lob.substr(lob_rec.binary_output,chunk_size,offset)));
+    offset := offset + chunk_size;
+  end loop;
+  dbms_output.put_line('length : '||length);
+  --select utl_raw.cast_to_varchar2(dbms_lob.substr(binary_output,2000,1)) test from all_scheduler_job_run_details where log_id=22532;
+end;
+/
 -- display jobs
 select * from all_scheduler_jobs where job_name like 'BACKUP_%'/**/;
 -- display credentials
@@ -148,18 +171,12 @@ select * from all_scheduler_groups where group_name like 'BACKUP_%';
 select * from all_scheduler_chains where chain_name like 'BACKUP_%';
 -- show when jobs have been run
 select * from all_scheduler_job_log where job_name like 'BACKUP_%' /*and owner='SYS'/**/ order by log_date desc;
--- show state and next execution for jobs
-select job_name,owner,STATE,NEXT_RUN_DATE,all_scheduler_jobs.* from all_scheduler_jobs where job_name like 'BACKUP_%' /*and owner='SYS'/**/;
--- show details about job runs
-select log_id,log_date,job_name,status,binary_output,output from all_scheduler_job_run_details where job_name like 'BACKUP_%'/**/ order by log_date desc;
-select log_id,log_date,dbms_lob.getlength(binary_output) "OUTPUT LENGTH",job_name,status,binary_output from all_scheduler_job_run_details where job_name like 'BACKUP_WORKER_%' order by log_date desc;
-select count(instance_id),instance_id from all_scheduler_job_run_details group by instance_id;
 
 --display jobs and their schedule, regardless if schedule specified by named schedule or part of job definition
-select j.owner,j.job_name,j.state,'schedule' "schedule defined as",j.schedule_name,s.repeat_interval from all_scheduler_jobs j, all_scheduler_schedules s where j.schedule_name=s.schedule_name union all
-select j.owner,j.job_name,j.state,'window' "schedule defined as",j.schedule_name,w.repeat_interval from all_scheduler_jobs j, all_scheduler_windows w where j.schedule_name=w.window_name union all
-select owner,job_name,state,'inline' "schedule defined as",null,repeat_interval from all_scheduler_jobs where schedule_name is null;
-select job_name,req_start_date,actual_start_date,a.* from all_scheduler_job_run_details a where actual_start_date - req_start_date > interval '48' day;
+          select j.owner,j.job_name,j.state,'schedule' "schedule defined as",j.schedule_name,s.repeat_interval from all_scheduler_jobs j, all_scheduler_schedules s where j.schedule_name=s.schedule_name
+union all select j.owner,j.job_name,j.state,'window' "schedule defined as",j.schedule_name,w.repeat_interval from all_scheduler_jobs j, all_scheduler_windows w where j.schedule_name=w.window_name
+union all select owner,job_name,state,'inline' "schedule defined as",null,repeat_interval from all_scheduler_jobs where schedule_name is null;
+select job_name,req_start_date,actual_start_date,a.* from all_scheduler_job_run_details a where actual_start_date - req_start_date > interval '4' day;
 
 select * from ALL_SCHEDULER_WINDOWS;
 select * from ALL_SCHEDULER_WINDOW_DETAILS;
