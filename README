@@ -6,8 +6,8 @@ Installation:
 bash> sqlplus / as sysdba
 SQL*Plus> @SCHEDULER_BACKUP
 SQL*Plus> begin
-scheduler_backup.setup(os_username=>'oracle',os_password=>'kennenurich',
-                       db_username=>'sys',db_password=>'kenneauchnurich');
+scheduler_backup.setup(os_username=>'oracle',os_password=>'onlyknownbyme',
+                       db_username=>'sys',db_password=>'alsoonlyknownbyme');
 end;
 /
 
