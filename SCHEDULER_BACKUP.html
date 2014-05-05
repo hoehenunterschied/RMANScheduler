@@ -16,9 +16,9 @@
      border-color: black; 
      border-style: solid; 
      border-width: 0.5pt; 
-     width: 900;
+     width: 1200;
      padding: 0.1cm;
-     background-color: rgb(255,255,215);
+     background-color: rgb(255,255,180);
      margin-left: 2cm;
      font-weight: bold;}
    .gelb {background:yellow;color:red;font-weight:bold;}
@@ -202,15 +202,15 @@ select * from table(scheduler_backup.status);
 
 COLUMN_VALUE
 -----------------------------------------------------
-       job : BACKUP_JOB_DAILY, enabled: TRUE
-       job : BACKUP_JOB_WEEKLY, enabled: TRUE
-       job : BACKUP_WORKER_DAILY, enabled: FALSE
-       job : BACKUP_WORKER_WEEKLY, enabled: FALSE
-   program : BACKUP_DAILY_PRGM, enabled: TRUE
-   program : BACKUP_WEEKLY_PRGM, enabled: TRUE
-     chain : BACKUP_CHAIN_WEEKLY, enabled: TRUE
-credential : BACKUP_DB_CREDENTIAL
-credential : BACKUP_OS_CREDENTIAL
+       job BACKUP_JOB_DAILY           enabled: TRUE
+       job BACKUP_JOB_WEEKLY          enabled: TRUE
+       job BACKUP_WORKER_DAILY        enabled: FALSE
+       job BACKUP_WORKER_WEEKLY       enabled: FALSE
+   program BACKUP_DAILY_PRGM          enabled: TRUE
+   program BACKUP_WEEKLY_PRGM         enabled: TRUE
+     chain BACKUP_CHAIN_WEEKLY        enabled: TRUE
+credential BACKUP_DB_CREDENTIAL       enabled: TRUE
+credential BACKUP_OS_CREDENTIAL       enabled: TRUE
 
 9 rows selected.
 </pre>
@@ -232,8 +232,40 @@ The column <strong><tt>BINARY_OUTPUT</tt></strong> of <strong><tt>ALL_SCHEDULER_
 as <strong><tt>BLOB</tt></strong>. An easy way to make the output visible is to execute the query from a worksheet in SQL Developer and double click into the
 <strong><tt>(BLOB)</tt></strong> field of the output. This opens a pop-up revealing the text after checking the 'Text' checkbox.<br>
 <br>
+RMAN output from previous executions of the backup jobs can also be made visible in SQL*Plus. Create a file
+<strong><tt>rman_output.sql</tt></strong> in your <strong><tt>$SQLPATH</tt></strong> with this content:
+</p>
+<pre class="dba_community_code">
+column job_name format a26
+select job_name,log_id,log_date from all_scheduler_job_run_details where binary_output is not null and job_name like 'BACKUP_%' order by log_date;
+
+declare
+  length integer;
+  offset integer := 1;
+  chunk_size constant integer := 2000;
+  lob_rec all_scheduler_job_run_details%rowtype;
+begin
+  select * into lob_rec from all_scheduler_job_run_details where  log_id=&log_id;
+  length := dbms_lob.getlength(lob_rec.binary_output);
+  dbms_output.put_line('*** Begin RMAN Output ******************');
+  while offset < length loop
+    dbms_output.put(utl_raw.cast_to_varchar2(dbms_lob.substr(lob_rec.binary_output,chunk_size,offset)));
+    offset := offset + chunk_size;
+  end loop;
+  dbms_output.put_line('length : '||length);
+  dbms_output.put_line('*** End RMAN Output ********************');
+end;
+/
+</pre>
 <p class="bodycopy">
-Two procedures disable further executions of backups and re-enable them again. The current <tt>SCHEDULER_BACKUP.DISABLE</tt>
+Then execute the script in SQL*Plus by typing <strong><tt>@rman_output</tt></strong>. A list with the job names, the log_id and
+start time of previous executions of backup jobs is displayed. You are prompted to provide a log_id.
+Type in the log_id of the backup job you are interested in and hit RETURN. The RMAN output of that job is displayed.
+<br>
+<br>
+</p>
+<p class="bodycopy">
+Two procedures disable further executions of backup jobs and re-enable them again. The current <tt>SCHEDULER_BACKUP.DISABLE</tt>
 implementation deletes all scheduler objects this package has created except the Credentials.
 <tt>SCHEDULER_BACKUP.ENABLE</tt> just calls <tt>SCHEDULER_BACKUP.SETUP</tt> without parameters, thereby recreating
 scheduler objects.
@@ -243,14 +275,22 @@ exec dbms_scheduler.disable;
 exec dbms_scheduler.enable;
 </pre><br>
 <p class="bodycopy">
+To manually start one of the jobs for daily or weekly backup, choose from the following:
+</p>
+<pre class="dba_community_code">
+-- execute backup jobs on demand
+exec dbms_scheduler.run_job(job_name=>'BACKUP_JOB_DAILY');
+exec dbms_scheduler.run_job(job_name=>'BACKUP_JOB_WEEKLY');
+</pre><br>
+<p class="bodycopy">
 Credentials can be modified. This most commonly applies to password changes, but it is also possible to change the operating system
 account which executes RMAN or the database account RMAN connects to. If the credentials do not exist, but enough information
 has been provided to create new ones, new Credentials are created.
 </p>
 <pre class="dba_community_code">
 begin
-  scheduler_backup.modify_credentials(os_username=>'oracle',os_password=>'iknowit',
-                                      db_username=>'sys',db_password=>'iknowitalso');
+  scheduler_backup.modify_credentials(os_username=>'oracle',os_password=>'onlyknownbyme',
+                                      db_username=>'sys',db_password=>'alsoonlyknownbyme');
 end;
 /
 </pre><br>
