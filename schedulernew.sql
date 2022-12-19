@@ -101,7 +101,7 @@ select * from all_objects where object_name like 'BACKUP_%';
 
 -- drops all objects scheduler_backup.setup has created
 exec scheduler_backup.drop_objects;
-exec scheduler_backup.drop_objects(drop_credentials=>false);
+exec scheduler_backup.drop_objects(drop_credentials=>true);
 
 exec dbms_scheduler.close_window(window_name=>'SATURDAY_WINDOW');
 exec dbms_scheduler.open_window(window_name=>'SATURDAY_WINDOW',duration=>interval '20' minute);
@@ -109,7 +109,7 @@ exec dbms_scheduler.open_window(window_name=>'SATURDAY_WINDOW',duration=>interva
 -- call this if you changed the scheduler_backup package, but the credentials did not change
 exec scheduler_backup.setup;
 -- to enforce RMAN configuration
-exec scheduler_backup.setup(configure_rman=>true);
+exec scheduler_backup.setup(configure_rman=>false);
 
 -- query status of scheduler objects scheduler_backup has created
 select * from table(scheduler_backup.status);
@@ -130,7 +130,7 @@ select output from gv$rman_output where session_recid=(select max(session_recid)
 select SID, START_TIME,TOTALWORK, sofar, round((sofar/totalwork) * 100,2) "% done",sysdate + TIME_REMAINING/3600/24 end_at from gv$session_longops where totalwork > sofar AND opname NOT LIKE '%aggregate%' AND opname like 'RMAN%';
 
 -- show state and next execution for jobs
-select job_name,owner,STATE,NEXT_RUN_DATE,all_scheduler_jobs.* from all_scheduler_jobs where job_name like 'BACKUP_%' /*and owner='SYS'/**/;
+select job_name,owner,STATE,NEXT_RUN_DATE,all_scheduler_jobs.* from all_scheduler_jobs where job_name like 'BACKUP_%' or state='RUNNING' /*and owner='SYS'/**/;
 -- show details about job runs
 select log_id,job_name,status,binary_output,log_date,run_duration from all_scheduler_job_run_details where job_name like 'BACKUP_%'/**/ order by log_date desc;
 -- to see RMAN output from previous executions in SQL*Plus
@@ -139,7 +139,7 @@ select log_id,job_name,status,binary_output,log_date,run_duration from all_sched
 --  then assign the log_id value to the lid variable below.
 select log_id,job_name,status,log_date,run_duration from all_scheduler_job_run_details where binary_output is not null and job_name like 'BACKUP_%' order by log_date desc;
 declare
-  lid integer := 22514;
+  lid integer:=&job_id;
   length integer;
   offset integer := 1;
   chunk_size constant integer := 2000;
@@ -183,7 +183,7 @@ select * from ALL_SCHEDULER_WINDOW_DETAILS;
 exec dbms_scheduler.enable('BACKUP_JOB_WEEKLY');
 exec dbms_scheduler.open_window(window_name=>'SATURDAY_WINDOW',duration=>interval '20' minute);
 exec dbms_scheduler.close_window(window_name=>'SATURDAY_WINDOW');
-exec dbms_scheduler.open_window(window_name=>'SUNDAY_WINDOW',duration=>interval '20' minute);
+exec dbms_scheduler.open_window(window_name=>'SUNDAY_WINDOW',duration=>interval '59' minute);
 exec dbms_scheduler.close_window(window_name=>'SUNDAY_WINDOW');
 
 select * from all_objects where object_name like upper('all_scheduler_%') and owner='SYS';

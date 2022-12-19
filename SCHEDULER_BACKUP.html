@@ -61,8 +61,8 @@ These job types were:
 The job types are what one would assume considering their name. They offer a huge advantage over pre 12c RMAN automation efforts: They enable RMAN backup automization completely from
 inside the database and in a operating system independent manner. Just by creating some Scheduler objects in the database.<br>
 <br>
-While some scheduler objects (Jobs, Programs, Schdules, Credentials) in the database are sufficient to have backups taken at specified times, more is needed to implement a
-backup strategy. One will want to be able to change passwords, monitor success or failure of backup jobs, temporarily suspend backups etc.<br>
+While some scheduler objects (Jobs, Programs, Schedules, Credentials) in the database are sufficient to have backups taken at specified times, more is needed to implement a
+backup strategy. One would want to be able to change passwords, monitor success or failure of backup jobs, temporarily suspend backups etc.<br>
 I have created the PL/SQL package <strong><tt>SCHEDULER_BACKUP</tt></strong> to help implementing an often used backup strategy: Daily and Weekly backups. Thanks to the new
 Scheduler job types the package works regardless if the operating system of the database server is Linux, Unix or Windows. By RMAN default, and the package does not change that,
 backups are written to the Fast Recovery Area (FRA) if one is configured. If not, the default location is the <strong><tt>dbs</tt></strong> (Linux/Unix) or
@@ -271,8 +271,8 @@ implementation deletes all scheduler objects this package has created except the
 scheduler objects.
 </p>
 <pre class="dba_community_code">
-exec dbms_scheduler.disable;
-exec dbms_scheduler.enable;
+exec scheduler_backup.disable;
+exec scheduler_backup.enable;
 </pre><br>
 <p class="bodycopy">
 To manually start one of the jobs for daily or weekly backup, choose from the following:
